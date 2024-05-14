@@ -160,7 +160,7 @@ def main(args):
     os.makedirs(save_figures_dir)
 
     # Tensorboard configure
-    log_dir = args.log_dir
+    log_dir = os.path.join(exp_dir,args.log_dir)
     if os.path.exists(log_dir):
         shutil.rmtree(log_dir)
     writer = SummaryWriter(log_dir=log_dir)
