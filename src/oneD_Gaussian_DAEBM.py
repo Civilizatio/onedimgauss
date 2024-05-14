@@ -71,6 +71,7 @@ def train(
     logger: Logger,
     writer: SummaryWriter,
     device: torch.device,
+    saved_models_dir: str,
     accumulators: Dict[str, Accumulator],
     averagemeters: Dict[str, AverageMeter],
     dynamic_sampling: bool,
@@ -127,10 +128,12 @@ def train(
             jump_mat = np.zeros(
                 ((args.num_diffusion_timesteps + 1), (args.num_diffusion_timesteps + 1))
             )
-            
+
             jump_coordinates = (
-                torch.cat([init_t_neg.view(-1, 1), t_neg.view(-1, 1).cpu()], 1).cpu().numpy()
-            ) # [B] [B] -> [B,2]
+                torch.cat([init_t_neg.view(-1, 1), t_neg.view(-1, 1).cpu()], 1)
+                .cpu()
+                .numpy()
+            )  # [B] [B] -> [B,2]
             np.add.at(jump_mat, tuple(zip(*jump_coordinates)), 1)
             accumulators["labels_jump_mat"].add(jump_mat.reshape(-1))
 
@@ -343,7 +346,7 @@ def train(
                 writer.add_figure("Density Slice", fig, global_step=epoch)
 
             # Count the number of timesteps at every 25 epochs.
-            # 
+            #
             if epoch % 25 == 0:
                 data = torch.tensor(accumulators["labels"].data)
                 data = data / (accumulators["labels"].len * batch_size)
@@ -364,7 +367,7 @@ def train(
                         "state_dict": net.state_dict(),
                         "step_size": mala_sampler.get_init_step_size(),
                     },
-                    save_path_prefix="./results/",
+                    save_path_prefix=saved_models_dir,
                 )
 
             # Whether to use reject when mgms sampling
@@ -419,6 +422,7 @@ def main(args):
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
+    saved_models_dir = os.path.join(exp_dir, args.saved_model_dir)
     # Summary Writer
     log_dir = os.path.join(exp_dir, args.log_dir)
     if os.path.exists(log_dir):
@@ -522,7 +526,9 @@ def main(args):
     accumulators = {}
     accumulators["mala_acpt_rate"] = Accumulator(args.num_diffusion_timesteps + 1)
     accumulators["labels"] = Accumulator(args.num_diffusion_timesteps + 1)
-    accumulators["labels_jump_mat"] = Accumulator((args.num_diffusion_timesteps+1)**2)
+    accumulators["labels_jump_mat"] = Accumulator(
+        (args.num_diffusion_timesteps + 1) ** 2
+    )
     meter_list = [
         "loss",
         "loss_pos",
@@ -560,6 +566,7 @@ def main(args):
         logger=logger,
         writer=writer,
         device=device,
+        saved_models_dir=saved_models_dir,
         accumulators=accumulators,
         averagemeters=meters,
         dynamic_sampling=args.dynamic_sampling,

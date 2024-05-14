@@ -193,6 +193,9 @@ class ParserUtils:
             type=str,
             default="experiments/"
         )
+
+        parser.add_argument("--saved_models_dir", type=str,
+                        default="saved_models/net", help="prefix of saved models")
         # Dataset Parameters
         parser.add_argument(
             "-n",
@@ -243,8 +246,8 @@ class ParserUtils:
         # Sampling Parameters
         parser.add_argument(
             "--mala_isreject",
-            type=bool,
-            default=True,
+            action="store_true",
+            default=False,
             help="whether using reject when langevin sampling",
         )
         parser.add_argument(
@@ -384,6 +387,19 @@ class ParserUtils:
         )
         parser.add_argument("--batch_size", type=int, default=100, help="batch size")
         parser.add_argument(
+            "--main_dir",
+            type=str,
+            required=True,
+            help="directory of the experiment: specify as ./ebm, ./daebm"
+        )
+        parser.add_argument(
+            "--exp_dir",
+            type=str,
+            default="experiments/"
+        )
+        parser.add_argument("--saved_models_dir", type=str,
+                        default="saved_models/net", help="prefix of saved models")
+        parser.add_argument(
             "--log_dir",
             type=str,
             default="tb_log/",
@@ -414,8 +430,8 @@ class ParserUtils:
         # Samping configure
         parser.add_argument(
             "--mala_isreject",
-            type=bool,
-            default=True,
+            action="store_true",
+            default=False,
             help="whether using reject when langevin sampling",
         )
         parser.add_argument(

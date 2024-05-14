@@ -2,6 +2,7 @@
 import torch
 import logging
 import matplotlib.pyplot as plt
+import os
 
 try:
     from lib.model import MyUfuncTemb
@@ -24,8 +25,12 @@ def main(args):
     net = MyUfuncTemb(
         in_ch=1, n_timesteps=args.num_diffusion_timesteps+1,act_func=args.act_func
     )
+
+    exp_dir = os.path.join(args.main_dir, args.pexp_dir, args.exp_dir)
+    pexp_dir = os.path.join(args.main_dir, args.pexp_dir)
     checkpoint = torch.load(
-        "./results/daebm_checkpoint.pt"
+        pexp_dir + 
+        "saved_models/net_checkpoint.pt"
     ) # epoch, state_dict, step_size
     net.load_state_dict(checkpoint["state_dict"])
     init_step_size = checkpoint["step_size"]
@@ -86,7 +91,7 @@ def main(args):
     plt.title("Results of Post-Sampling (DAEBM)")
     plt.legend()
     plt.show()
-    fig.savefig("./figures/daebm-postsampling.png")
+    fig.savefig(exp_dir+"/figures/daebm-postsampling.png")
 
     # Long run sampling: fron real data
     mgms_sampler = MGMS_sampling(
@@ -106,7 +111,7 @@ def main(args):
     plt.title("Results of Long-run-Sampling (DAEBM)")
     plt.legend()
     plt.show()
-    fig.savefig("./figures/daebm-longrunsampling.png")
+    fig.savefig(exp_dir+"/figures/daebm-longrunsampling.png")
 
     
 if __name__ =="__main__":

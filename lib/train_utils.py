@@ -209,7 +209,7 @@ class SchedulerConfigure:
     def configure_warmup_scheduler(optimizer, n_warm_iters) -> WarmUpLR:
         return SchedulerConfigure.WarmUpLR(optimizer, n_warm_iters)
 
-def save_checkpoint(state, save_path_prefix="", filename="daebm_checkpoint.pt"):
+def save_checkpoint(state, save_path_prefix="", filename="_checkpoint.pt"):
     if not os.path.exists(os.path.dirname(save_path_prefix)):
         os.makedirs(os.path.dirname(save_path_prefix))
     torch.save(state, save_path_prefix + filename)
