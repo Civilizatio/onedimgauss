@@ -28,17 +28,17 @@ case $program_type in
             --main_dir ./daebm \
             --exp_dir experiements/oneDGaussianDAEBM/exp1 \
             --log_dir runs \
-            --saved_model_dir saved_models/net \
+            --saved_models_dir saved_models/net \
             --t_seed 2024 \
             --num_of_points 1000 \
             --means -3 -1 1 3 \
             --peaks_ratio 1 3 3 1 \
             --print_freq 50 \
-            --cuda 1 \
+            --cuda 4 \
             --betas 0.0 0.999 \
             --optimizer_type adam \
             --lr 5e-3 \
-            --n_epochs 200 \
+            --n_epochs 20 \
             --time_embedding_type sin \
             --scheduler_type MultiStep \
             --milestones 160 180 220 \
@@ -62,22 +62,24 @@ case $program_type in
             --exp_dir post_sampling/ \
             --pexp experiements/oneDGaussianDAEBM/exp1 \
             --t_seed 2024 \
+            --cuda 4 \
             --num_of_points 1000 \
             --stop_a_chain_M 50 \
             --total_iters 1000 \
             --sampling_chains 1000 \
-            --num_diffusion_timesteps 10 \
+            --num_diffusion_timesteps 6 \
             --diffusion_schedule sqrtcumlinear \
             --diffusion_betas 1e-2 0.15 \
-            --mala_isreject True \
+            --mala_isreject \
             --sample_steps 50 \
             --dynamic_sampling
         ;;
     "oneD_Gaussian")
-        python ./oneD_Gaussian.py \
+        python ./src/oneD_Gaussian.py \
             --main_dir ./ebm \
             --exp_dir experiements/oneDGaussianEBM/exp1 \
             --log_dir runs \
+            --saved_models_dir saved_models/net \
             --num_of_points 1000 \
             --mala_sigma 0.1 \
             --mala_steps 40 \

@@ -13,9 +13,13 @@ import matplotlib.pyplot as plt
 from typing import Union, Dict
 import seaborn as sn
 import os
+import sys
 import shutil
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
+
+cwd = os.getcwd()
+sys.path.append(cwd)
 
 try:
     from lib.config_parser import ParserUtils
@@ -102,8 +106,8 @@ def train(
             niter += 1
 
             # Init x_t and t
-            t = t_sampler.sample_t(num_of_samples=x_0.shape[0])
             x_0 = next(iter(dataloader)).unsqueeze(-1)
+            t = t_sampler.sample_t(num_of_samples=x_0.shape[0])
             x_t = gauss_diffusion.q_sample(x_0.to(device), t)
 
             init_x_t_neg, init_t_neg, buffer_idx = replay_buffer.sample_buffer(
@@ -349,7 +353,7 @@ def train(
             #
             if epoch % 25 == 0:
                 data = torch.tensor(accumulators["labels"].data)
-                data = data / (accumulators["labels"].len * batch_size)
+                # data = data / (accumulators["labels"].len * batch_size)
                 fig = plt.figure()
                 plt.bar(torch.arange(num_diffusion_timesteps + 1), data)
                 plt.xlabel("TimeSteps")
@@ -422,7 +426,11 @@ def main(args):
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    saved_models_dir = os.path.join(exp_dir, args.saved_model_dir)
+    saved_models_dir = os.path.join(exp_dir, args.saved_models_dir)
+    
+    save_figures_dir = os.path.join(exp_dir, "figures")
+    os.makedirs(save_figures_dir)
+
     # Summary Writer
     log_dir = os.path.join(exp_dir, args.log_dir)
     if os.path.exists(log_dir):
@@ -587,17 +595,13 @@ def main(args):
     plt.plot(losses, label="loss")
     plt.xlabel("n_iter")
     plt.ylabel("loss")
-    plt.legend()
-    plt.show()
-    fig.savefig("./figures/daebm-losses.png")
+    fig.savefig(os.path.join(save_figures_dir,"daebm-losses.png"))
 
     # Time0 curve
     fig = plt.figure(figsize=(8, 5))
     plt.hist(time0_bank.squeeze(), bins=100, range=(-4, 4), density=True)
     plt.title("Time0 samples")
-    plt.legend()
-    plt.show()
-    fig.savefig("./figures/daebm-time0-samples.png")
+    fig.savefig(os.path.join(save_figures_dir,"daebm-time0-samples.png"))
 
 
 if __name__ == "__main__":

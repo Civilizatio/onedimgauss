@@ -109,6 +109,8 @@ class ParserUtils:
             type=str,
             default="experiments/"
         )
+        parser.add_argument("--saved_models_dir", type=str,
+                        default="saved_models/net", help="prefix of saved models")
         # Dataset Configure
         parser.add_argument(
             "-n",
@@ -397,6 +399,11 @@ class ParserUtils:
             type=str,
             default="experiments/"
         )
+        parser.add_argument(
+            "--pexp_dir",
+            type=str,
+            default="experiments/"
+        )
         parser.add_argument("--saved_models_dir", type=str,
                         default="saved_models/net", help="prefix of saved models")
         parser.add_argument(
@@ -405,6 +412,7 @@ class ParserUtils:
             default="tb_log/",
             help="path and prefix of tensorboard log file",
         )
+        parser.add_argument("--cuda", type=int, default="0", help="device-name")
         # Diffusion Parameters
         parser.add_argument(
             "--num_diffusion_timesteps",

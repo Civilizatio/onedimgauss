@@ -3,11 +3,15 @@
 import torch
 from torch.utils.data import DataLoader
 import os
+import sys
 import logging
 import argparse
 import matplotlib.pyplot as plt
 import shutil
 from torch.utils.tensorboard import SummaryWriter
+
+cwd = os.getcwd()
+sys.path.append(cwd)
 
 try:
     from lib.config_parser import ParserUtils
@@ -55,6 +59,7 @@ def train(
     mala_sampler:MALA_Sampling,
     logger:logging.Logger,
     writer:SummaryWriter,
+    saved_models_dir:str,
     num_of_points:int=1000,
     num_of_iters:int=1200,
 ):
@@ -82,7 +87,8 @@ def train(
             loss.backward()
             optimizer.step()
 
-             # Acquire norm of grads of loss
+            losses.append(loss.item())
+            # Acquire norm of grads of loss
             grads_norms = torch.tensor([param.grad.norm().item() for param in net.parameters()])
             grad_norm_sum = torch.norm(grads_norms)
 
@@ -100,7 +106,7 @@ def train(
             # update replay buffer
             replay_buffer.update_buffer(buffer_idx, x_neg)
 
-           
+            # Plot replay buffer figures
             fig = plt.figure()
             x_tmp = torch.linspace(-4, 4, 100).unsqueeze(-1)
             y, _ = replay_buffer.sample_from_buffer(num_of_points)
@@ -122,8 +128,7 @@ def train(
                         "epoch": epoch,
                         "state_dict": net.state_dict(),
                     },
-                    save_path_prefix="./results/",
-                    filename="ebm_checkpoint.pt"
+                    save_path_prefix=saved_models_dir,
                 )
                 
             if niter % 200 == 0:
@@ -132,11 +137,27 @@ def train(
     return losses
 
 def main(args):
+
     # Logger configure
     logging.basicConfig(
         format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO
     )
     logger = logging.getLogger("EBM Training")
+
+    # Dir config
+    exp_dir = os.path.join(args.main_dir, args.exp_dir)
+    try:
+        os.makedirs(exp_dir)
+    except FileExistsError:
+        shutil.rmtree(exp_dir)
+        os.makedirs(exp_dir)
+
+    # dir for saving models
+    saved_models_dir = os.path.join(exp_dir, args.saved_models_dir)
+    
+    # dir for saving figures
+    save_figures_dir = os.path.join(exp_dir, "figures")
+    os.makedirs(save_figures_dir)
 
     # Tensorboard configure
     log_dir = args.log_dir
@@ -176,6 +197,7 @@ def main(args):
         mala_sampler=mala_sampler,
         logger=logger,
         writer=writer,
+        saved_models_dir=saved_models_dir,
         num_of_points=args.num_of_points,
         num_of_iters=args.n_iter,
     )
@@ -186,21 +208,18 @@ def main(args):
     plt.xlabel("n_iter")
     plt.ylabel("loss")
     plt.legend()
-
-    plt.show()
-    fig.savefig("./figures/ebm_losses.png")
+    fig.savefig(os.path.join(save_figures_dir,"ebm_losses.png"))
 
     # Plot results
     fig = plot_results_of_ebm(dataset=dataset,net=net,replay_buffer=replay_buffer)
     writer.add_figure("Results",fig,global_step=0)
-    fig.savefig("./figures/sampling_results.png")
+    fig.savefig(os.path.join(save_figures_dir,"sampling_results.png"))
 
     # distribution
     x = torch.linspace(-4, 4, 100).unsqueeze(-1)
     energy_truth = dataset.ufunc0(x).squeeze()
     energy_model = net(x).detach().squeeze()
 
-     # distribution
     energy_truth_normalized = energy_truth - torch.min(energy_truth)
     energy_model_normalized = energy_model - torch.min(energy_model)
 
@@ -221,7 +240,7 @@ def main(args):
         density_model_normalized,
         linewidth=2, markersize=12, label="Learned"
     )
-    fig.savefig("./figures/ebm_distributions.png")
+    fig.savefig(os.path.join(save_figures_dir,"ebm_distributions.png"))
 
 
 if __name__ == "__main__":
