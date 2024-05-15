@@ -1,0 +1,6 @@
+# ignore files of experiements
+daebm/
+ebm/
+
+# ignore files of __pycache__
+__pycache__/
