@@ -255,7 +255,7 @@ class MGMS_sampling:
         """ Extract some coefficients at specfied timesteps,
         then reshape to [batch_size, 1, 1, ...] for broadcasting purposes
 
-        Size of imput should be [num_of_timesteps+1]
+        Size of input should be [num_of_timesteps+1]
         Size of t should be [batch_size, 1]
         neet to gather input_t to [batch_size,1,1,...], the same like xshape,
         which should be [batch_size, channels, height, width]

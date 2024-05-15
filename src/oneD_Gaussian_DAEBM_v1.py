@@ -1,25 +1,29 @@
 # DAEBM中一维高斯实验的DAEBM实现
-# Date:2024/02/20 changed by Li Ke,
+# Date:2024/02/20 changed by Li Ke, 
 # Comment:  1. 增加 TensorBoard 模块，统计过程中出现的图像、数据；
 #           2. loss统计正相以及负相，增加到 TensorBoard 中。
 #           3. 每个数个 epoch 统计不同状态下采样状态的分布
+# Date:2024/02/27 changed by Li Ke,
+# Comment: 由于出现了学习四模态高斯分布结果为标准正态分布的情况，这里统计
+#       抽出一个batch的图像。
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset,DataLoader
+import torch.nn as nn
 from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import MultiStepLR, LambdaLR
+import numpy as np
+import re
+import math
+
 import logging
 from logging import Logger
 import matplotlib.pyplot as plt
 from typing import Union, Dict
 import seaborn as sn
 import os
-import sys
 import shutil
-import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
-cwd = os.getcwd()
-sys.path.append(cwd)
 
 try:
     from lib.config_parser import ParserUtils
@@ -43,22 +47,25 @@ except ImportError:
     raise
 
 
-####### Some tool functions
+
 def training_losses(net, x_pos, t_pos, x_neg, t_neg):
     """Calculate training losses using ML.
-
+    
     loss = U_pos - U_neg
     """
     energy_pos = net.energy_output(x_pos, t_pos)
     energy_neg = net.energy_output(x_neg, t_neg)
 
-    loss_pos = energy_pos.mean()
-    loss_neg = energy_neg.mean()
+    loss_pos = energy_pos.squeeze().mean()
+    loss_neg = energy_neg.squeeze().mean()
 
-    loss = loss_pos - loss_neg
+    loss = loss_pos - loss_neg  # squeeze() seems like no use
 
     return loss, loss_pos, loss_neg
 
+
+# step 5: TODO: train function
+#   Settings:
 
 def train(
     net: MyUfuncTemb,
@@ -69,18 +76,14 @@ def train(
     batch_size: int,
     scheduler: Union[MultiStepLR, LambdaLR],
     warmup_scheduler: SchedulerConfigure.WarmUpLR,
-    mala_sampler: MGMS_sampling_LocalJump,
-    t_sampler: GenerateDistributionOfT,
+    mala_sampler: MGMS_sampling,
     gauss_diffusion: GaussianDiffusion,
     logger: Logger,
-    writer: SummaryWriter,
-    device: torch.device,
-    saved_models_dir: str,
+    writer:SummaryWriter,
+    device:torch.device,
     accumulators: Dict[str, Accumulator],
     averagemeters: Dict[str, AverageMeter],
     dynamic_sampling: bool,
-    local_jump_enabled: bool,
-    start_local_epoch: int,
     num_diffusion_timesteps: int,
     num_of_points: int = 1000,
     num_of_epochs: int = 200,
@@ -94,54 +97,34 @@ def train(
     time0_save_sample_idx = 0
     iter_per_epoch = num_of_points // batch_size
 
-    # Record time
-    timer_list = ["epoch", "sampling"]
-    timers = {key: Timer() for key in timer_list}
 
     for epoch in range(num_of_epochs):
-
-        timers["epoch"].start()
-        mgms_local_enabled = local_jump_enabled and epoch >= start_local_epoch
         for idx in range(iter_per_epoch):
             niter += 1
 
             # Init x_t and t
             x_0 = next(iter(dataloader)).unsqueeze(-1)
-            t = t_sampler.sample_t(num_of_samples=x_0.shape[0])
+            t = torch.randint(high=num_diffusion_timesteps + 1, size=(x_0.shape[0], 1)).to(device)
             x_t = gauss_diffusion.q_sample(x_0.to(device), t)
 
             init_x_t_neg, init_t_neg, buffer_idx = replay_buffer.sample_buffer(
                 n_samples=batch_size
             )
 
+            # Draw samples
             # Get x_neg, t_neg through MGMS sampling
             x_t_neg, t_neg, acpt_rate = mala_sampler.mgms_sampling(
-                net, init_x_t_neg.to(device), init_t_neg.to(device), mgms_local_enabled
+                net, init_x_t_neg.to(device), init_t_neg.to(device)
             )
 
             # Update accept rate of MGMS
-            accumulators["mala_acpt_rate"].add(acpt_rate.nan_to_num())
+            accumulators["mala_acpt_rate"].add(1, acpt_rate.nan_to_num())
 
             # Count the timesteps
-            labels_accumulator = [
-                torch.sum(t_neg == i).item() for i in range(num_diffusion_timesteps + 1)
-            ]
-            accumulators["labels"].add(labels_accumulator)
-
-            # Count for label transfer
-            jump_mat = np.zeros(
-                ((args.num_diffusion_timesteps + 1), (args.num_diffusion_timesteps + 1))
-            )
-
-            jump_coordinates = (
-                torch.cat([init_t_neg.view(-1, 1), t_neg.view(-1, 1).cpu()], 1)
-                .cpu()
-                .numpy()
-            )  # [B] [B] -> [B,2]
-            np.add.at(jump_mat, tuple(zip(*jump_coordinates)), 1)
-            accumulators["labels_jump_mat"].add(jump_mat.reshape(-1))
-
-            t_neg = t_neg.to(device)
+            labels_accumulator = [torch.sum(t_neg==i).item() for i in range(num_diffusion_timesteps+1)]
+            accumulators["labels"].add(1, labels_accumulator)
+            
+            t_neg= t_neg.to(device)
             x_t_neg = x_t_neg.to(device)
 
             # Calculate loss
@@ -149,69 +132,44 @@ def train(
                 net=net, x_pos=x_t, t_pos=t, x_neg=x_t_neg, t_neg=t_neg
             )
 
+
             if torch.isnan(loss) or loss.abs().item() > 1e8:
                 logger.error("Training breakdown")
                 break
 
             # Update parameters
             optimizer.zero_grad()
-            loss.backward(retain_graph=True)
+            loss.backward()
+            optimizer.step()
 
             # Acquire norm of grads of loss
-            grads_norms = torch.tensor(
-                [param.grad.norm().item() for param in net.parameters()]
-            )
-            grad_norm_sum = torch.norm(grads_norms)
+            grads_norms = [param.grad.norm().item() for param in net.parameters()]
+            grad_norm_sum = sum(grads_norms)
 
-            # Acquire norm of grads of loss_pos and loss_neg
-            gradients = torch.autograd.grad(
-                loss_pos, net.parameters(), retain_graph=True
-            )
-            pos_grad_norm = torch.norm(
-                torch.tensor([grad.norm().item() for grad in gradients])
-            )
-
-            gradients = torch.autograd.grad(
-                loss_neg, net.parameters(), retain_graph=True
-            )
-            neg_grad_norm = torch.norm(
-                torch.tensor([grad.norm().item() for grad in gradients])
-            )
-
-            optimizer.step()
             losses.append(loss.item())
 
             averagemeters["loss"].update(loss.item(), batch_size)
             averagemeters["loss_pos"].update(loss_pos.item(), batch_size)
             averagemeters["loss_neg"].update(loss_neg.item(), batch_size)
-            averagemeters["loss_grad_norm"].update(grad_norm_sum.item(), batch_size)
-            averagemeters["pos_grad_norm"].update(pos_grad_norm.item(), batch_size)
-            averagemeters["neg_grad_norm"].update(neg_grad_norm.item(), batch_size)
-
+            averagemeters["loss_grad_norm"].update(grad_norm_sum, batch_size)
+            
             writer.add_scalars(
-                main_tag="Loss_iter",
+                main_tag="Loss/loss_iter",
                 tag_scalar_dict={
-                    "Loss": loss.item(),
-                    "Loss_pos": loss_pos.item(),
-                    "Loss_neg": loss_neg.item(),
+                    "Loss":loss.item(),
+                    "Loss_pos":loss_pos.item(),
+                    "Loss_neg":loss_neg.item()
                 },
-                global_step=niter,
+                global_step=niter
             )
-            writer.add_scalars(
-                main_tag="Loss_grad_iter",
-                tag_scalar_dict={
-                    "loss_grad_norm": grad_norm_sum,
-                    "pos_grad_norm": pos_grad_norm,
-                    "neg_grad_norm": neg_grad_norm,
-                },
-                global_step=niter,
-            )
+            writer.add_scalar(tag="Loss/Loss_grad_norm", scalar_value=grad_norm_sum, global_step=niter)
 
             # Update replay buffer
-            t_neg = t_neg.cpu()
+            t_neg= t_neg.cpu()
             x_t_neg = x_t_neg.cpu()
             replay_buffer.update_buffer(buffer_idx, x_t_neg, t_neg)
 
+          
             # Time0 samples
             data_samples = x_t_neg  # [B,1]
             data_labels = t_neg  # [B,1]
@@ -254,42 +212,27 @@ def train(
             # Learning rate update
             scheduler.step()
 
-            # Record time of one epoch
-            timers["epoch"].stop()
-            logger.info(
-                f"EPOCH:{epoch} - Using time of EPOCH is {timers['epoch'].elapsed_time}s"
-            )
-
             # Average loss and grad
             writer.add_scalars(
                 main_tag="Loss/Average",
                 tag_scalar_dict={
-                    "average_loss": averagemeters["loss"].avg,
-                    "average_pos": averagemeters["loss_pos"].avg,
-                    "average_neg": averagemeters["loss_neg"].avg,
+                    "average_loss":averagemeters["loss"].avg,
+                    "average_pos":averagemeters["loss_pos"].avg,
+                    "average_neg":averagemeters["loss_neg"].avg
                 },
-                global_step=epoch,
+                global_step=epoch
             )
-            writer.add_scalars(
-                main_tag="Loss_grad/Average",
-                tag_scalar_dict={
-                    "average_loss_grad": averagemeters["loss_grad_norm"].avg,
-                    "average_pos_grad": averagemeters["pos_grad_norm"].avg,
-                    "average_neg_grad": averagemeters["neg_grad_norm"].avg,
-                },
-                global_step=epoch,
-            )
+            writer.add_scalar("Loss/average_grad",averagemeters["loss_grad_norm"].avg,epoch)
+
             # Reset Averagemeters
             for key in averagemeters:
                 averagemeters[key].reset()
 
             # Plot energy function
-            if (epoch % (num_of_epochs // 10)) == 0 or (epoch == num_of_epochs - 1):
+            if epoch % (num_of_epochs//10) == 0:
                 x = torch.linspace(-4, 4, 100).unsqueeze(-1)
                 energy_truth = dataset.ufunc0(x).squeeze()
-                energy_model = (
-                    net.energy_output(x.to(device)).detach().clone().squeeze().cpu()
-                )
+                energy_model = net.energy_output(x.to(device)).detach().clone().squeeze().cpu()
                 fig = plt.figure(figsize=(8, 5))
                 plt.plot(
                     x.squeeze(),
@@ -306,37 +249,23 @@ def train(
                 plt.ylabel("Energy")
                 plt.legend()
                 writer.add_figure("Energy function", fig, global_step=epoch)
-
-                fig, axes = plt.subplots(
-                    1, num_diffusion_timesteps + 1, figsize=(10, 8)
-                )
+            
+                fig, axes = plt.subplots(1, num_diffusion_timesteps+1, figsize=(10,8))
                 x = torch.linspace(-4, 4, 100).unsqueeze(-1)
-                for i in range(num_diffusion_timesteps + 1):
+                for i in range(num_diffusion_timesteps+1):
                     t = torch.zeros((x.shape[0], 1)).fill_(i).long().to(device)
-                    energy_model = (
-                        net.energy_output(x.to(device), t)
-                        .detach()
-                        .clone()
-                        .squeeze()
-                        .cpu()
-                    )
-                    axes[i].plot(x.squeeze(), energy_model - torch.min(energy_model))
+                    energy_model = net.energy_output(x.to(device), t).detach().clone().squeeze().cpu()
+                    axes[i].plot(x.squeeze(),energy_model-torch.min(energy_model))
                     axes[i].set_title(f"Time {i}")
-                writer.add_figure(
-                    "Energy function of diffusion data", fig, global_step=epoch
-                )
+                writer.add_figure("Energy function of diffusion data",fig, global_step=epoch)
 
                 # Count different timelabels in replay buffer
-                fig, axes = plt.subplots(
-                    1, num_diffusion_timesteps + 1, figsize=(10, 8)
-                )
-                for i in range(num_diffusion_timesteps + 1):
-                    data = replay_buffer.buffer_of_samples[
-                        replay_buffer.buffer_of_t == i
-                    ]
+                fig, axes = plt.subplots(1, num_diffusion_timesteps+1, figsize=(10,8))
+                for i in range(num_diffusion_timesteps+1):
+                    data = replay_buffer.buffer_of_samples[replay_buffer.buffer_of_t==i]
                     if torch.numel(data) == 0:
                         data = torch.tensor([0])
-                    axes[i].hist(data.squeeze(), bins=100, range=(-4, 4))
+                    axes[i].hist(data.squeeze(),bins=100,range=(-4,4))
                 plt.tight_layout()
                 writer.add_figure("Replay buffer data", fig, global_step=epoch)
 
@@ -345,24 +274,21 @@ def train(
                     dataset=dataset,
                     net=net,
                     device=device,
-                    num_diffusion_timesteps=num_diffusion_timesteps,
+                    num_diffusion_timesteps=num_diffusion_timesteps
                 )
-                writer.add_figure("Density Slice", fig, global_step=epoch)
+                writer.add_figure("Density Slice",fig, global_step=epoch)
 
-            # Count the number of timesteps at every 25 epochs.
-            #
-            if epoch % 25 == 0:
+            # 统计每隔25个epoch的时间步数
+            if epoch % 25 ==0:
                 data = torch.tensor(accumulators["labels"].data)
-                # data = data / (accumulators["labels"].len * batch_size)
+                data = data / (accumulators["labels"].len*batch_size)
                 fig = plt.figure()
-                plt.bar(torch.arange(num_diffusion_timesteps + 1), data)
+                plt.bar(torch.arange(num_diffusion_timesteps+1),data)
                 plt.xlabel("TimeSteps")
                 plt.ylabel("Distribution")
-                writer.add_figure(
-                    "Distribution of timesteps over 25 epochs", fig, global_step=epoch
-                )
+                writer.add_figure("Distribution of timesteps over 25 epochs", fig, global_step=epoch)
                 accumulators["labels"].reset()
-
+                
             if epoch % 20 == 0:
                 # Save models
                 save_checkpoint(
@@ -371,7 +297,7 @@ def train(
                         "state_dict": net.state_dict(),
                         "step_size": mala_sampler.get_init_step_size(),
                     },
-                    save_path_prefix=saved_models_dir,
+                    save_path_prefix="./results/",
                 )
 
             # Whether to use reject when mgms sampling
@@ -391,24 +317,20 @@ def train(
                 and epoch >= start_reject_epochs
             ):
                 mala_sampler.adjust_step_size_given_acpt_rate()
-
-            # Record mala_acpt_rate
             accumulators["mala_acpt_rate"].reset()
             for i in range(num_diffusion_timesteps + 1):
                 writer.add_scalar("AcptRate/Time" + str(i), acpt_rate[i], epoch)
-
+    else:
+        # Write to replay buffer
+        replay_buffer_dict = {
+            "samples":replay_buffer.buffer_of_samples[:],
+            "labels":replay_buffer.buffer_of_t[:]
+        }
+        torch.save(replay_buffer_dict, "./results/replay_buffer.pt")
     return losses, time0_bank
 
 
 def main(args):
-
-    # Dir config
-    exp_dir = os.path.join(args.main_dir, args.exp_dir)
-    try:
-        os.makedirs(exp_dir)
-    except FileExistsError:
-        shutil.rmtree(exp_dir)
-        os.makedirs(exp_dir)
 
     # Logging init
     logging.basicConfig(
@@ -417,22 +339,14 @@ def main(args):
     logger = logging.getLogger("DAEBM Training")
 
     # Add fileHandler
-    fh = logging.FileHandler(filename=f"{exp_dir}/log.txt", mode="w")
+    fh = logging.FileHandler(filename="./results/log_v1.txt", mode="w")
     fh.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    formatter = logging.Formatter(fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    saved_models_dir = os.path.join(exp_dir, args.saved_models_dir)
-    
-    save_figures_dir = os.path.join(exp_dir, "figures")
-    os.makedirs(save_figures_dir)
-
     # Summary Writer
-    log_dir = os.path.join(exp_dir, args.log_dir)
+    log_dir = args.log_dir
     if os.path.exists(log_dir):
         shutil.rmtree(log_dir)
     writer = SummaryWriter(log_dir=log_dir)
@@ -444,10 +358,7 @@ def main(args):
     torch.manual_seed(args.t_seed)
 
     # Dataset
-    peaks_ratio = [x / sum(args.peaks_ratio) for x in args.peaks_ratio]
-    myDataset = GaussFourDataset(
-        num_of_points=args.num_of_points, means=args.means, alpha=peaks_ratio
-    )
+    myDataset = GaussFourDataset(args.num_of_points)
 
     # DataLoader
     dataloader = DataLoader(
@@ -456,25 +367,24 @@ def main(args):
 
     # Networks Configuration
     net = MyUfuncTemb(
-        in_ch=1,
-        n_timesteps=args.num_diffusion_timesteps + 1,
-        act_func=args.act_func,
-        time_embedding_type=args.time_embedding_type,
+        in_ch=1, n_timesteps=args.num_diffusion_timesteps + 1, act_func=args.act_func
     )
     logger.info(str(net))
     net = InitializeNet.initialize_net(net, args.net_init_method).to(device)
 
     # Optimizer Configuration
     optimizer = OptimizerConfigure.configure_optimizer(
-        params=net.parameters(),
-        optimizer_type=args.optimizer_type,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        betas=args.betas,
-        sgd_momentum=args.sgd_momentum,
+        net.parameters(),
+        args.optimizer_type,
+        args.lr,
+        args.weight_decay,
+        args.betas,
+        args.sgd_momentum,
     )
 
     # Scheduler Configuration
+    
+   # Scheduler Configuration
     scheduler = SchedulerConfigure.configure_scheduler(
         optimizer=optimizer,
         scheduler_type=args.scheduler_type,
@@ -501,7 +411,7 @@ def main(args):
         beta_schedule=args.diffusion_schedule,
         beta_start=args.diffusion_betas[0],
         beta_end=args.diffusion_betas[1],
-        device=device,
+        device=device
     )
 
     # Get init step size of Langevin Dynamic
@@ -513,50 +423,31 @@ def main(args):
     logger.info("sigmas:" + str(gauss_diffusion.get_sigmas()))
     logger.info("step_size:" + str(init_step_size))
 
-    # Change MGMS_sampling to local jump version
-    # @2024/03/25
-    mala_sampler = MGMS_sampling_LocalJump(
+    mala_sampler = MGMS_sampling(
         num_steps=args.sample_steps,
         init_step_size=init_step_size,
         is_reject=args.mala_isreject,
-        device=device,
-        window_size=args.window_size,
-    )
-
-    # t sampler
-    t_sampler = GenerateDistributionOfT(
-        method=args.sample_method_of_t,
-        time_dim=args.num_diffusion_timesteps + 1,
-        device=device,
+        device=device
     )
 
     # Ancillary classes
     accumulators = {}
     accumulators["mala_acpt_rate"] = Accumulator(args.num_diffusion_timesteps + 1)
-    accumulators["labels"] = Accumulator(args.num_diffusion_timesteps + 1)
-    accumulators["labels_jump_mat"] = Accumulator(
-        (args.num_diffusion_timesteps + 1) ** 2
-    )
-    meter_list = [
-        "loss",
-        "loss_pos",
-        "loss_neg",
-        "loss_grad_norm",
-        "pos_grad_norm",
-        "neg_grad_norm",
-    ]
-    meters = {key: AverageMeter() for key in meter_list}
+    accumulators["labels"] = Accumulator(args.num_diffusion_timesteps+1)
+    meter_list = ["loss", "loss_pos", "loss_neg", "loss_grad_norm"]
+    meters = {key:AverageMeter() for key in meter_list}
 
     # Draw points of different time steps.
     x_ = myDataset.get_full_data().unsqueeze(-1)
     diffuse_data_pool = gauss_diffusion.q_sample_progressive(x_.to(device))
-    fig, axes = plt.subplots(1, args.num_diffusion_timesteps + 1, figsize=(10, 8))
+    fig, axes = plt.subplots(1, args.num_diffusion_timesteps+1, figsize=(10,8))
     for i in range(args.num_diffusion_timesteps + 1):
         diffuse_data = diffuse_data_pool[i]
         axes[i].hist(diffuse_data, bins=100, range=(-4, 4))
         axes[i].set_title(f"Timestep:{i}")
     plt.show()
-    writer.add_figure("Diffusion Data", fig)
+    writer.add_figure("Diffusion Data",fig)
+
 
     # Training
     losses, time0_bank = train(
@@ -569,17 +460,13 @@ def main(args):
         scheduler=scheduler,
         warmup_scheduler=warmup_scheduler,
         mala_sampler=mala_sampler,
-        t_sampler=t_sampler,
         gauss_diffusion=gauss_diffusion,
         logger=logger,
         writer=writer,
         device=device,
-        saved_models_dir=saved_models_dir,
         accumulators=accumulators,
         averagemeters=meters,
         dynamic_sampling=args.dynamic_sampling,
-        local_jump_enabled=args.local_jump_enabled,
-        start_local_epoch=args.start_local_epoch,
         num_diffusion_timesteps=args.num_diffusion_timesteps,
         num_of_points=args.num_of_points,
         num_of_epochs=args.n_epochs,
@@ -595,17 +482,23 @@ def main(args):
     plt.plot(losses, label="loss")
     plt.xlabel("n_iter")
     plt.ylabel("loss")
-    fig.savefig(os.path.join(save_figures_dir,"daebm-losses.png"))
+    plt.legend()
+    plt.show()
+    fig.savefig("./figures/daebm_v1-losses.png")
 
     # Time0 curve
     fig = plt.figure(figsize=(8, 5))
     plt.hist(time0_bank.squeeze(), bins=100, range=(-4, 4), density=True)
     plt.title("Time0 samples")
-    fig.savefig(os.path.join(save_figures_dir,"daebm-time0-samples.png"))
+    plt.legend()
+    plt.show()
+    fig.savefig("./figures/daebm-time0-samples_v1.png")
+
+   
 
 
 if __name__ == "__main__":
-
+    
     parser = ParserUtils.get_parser(parser_type="daebm")
     args = parser.parse_args()
     ParserUtils.args_check(args, "daebm")
