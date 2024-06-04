@@ -7,20 +7,20 @@ from typing import Literal
 class _MyDataset(Dataset):
     """One dimesion Gaussian ( Can be substituded by GaussFourDataset )"""
 
-    def __init__(self, num_points=1000, bias=2, alpha=3 / 4, sigma=0.1):
+    def __init__(self, num_of_points=1000, bias=2, alpha=3 / 4, sigma=0.1):
         super(_MyDataset, self).__init__()
-        self.num_points = num_points
+        self.num_of_points = num_of_points
         self.b = torch.tensor(bias)
         self.alpha = torch.tensor(alpha)
         self.sigma = torch.tensor(sigma)
-        x1 = -self.b + self.sigma * torch.randn((int(self.alpha * self.num_points),))
+        x1 = -self.b + self.sigma * torch.randn((int(self.alpha * self.num_of_points),))
         x2 = self.b + self.sigma * torch.randn(
-            (int((1 - self.alpha) * self.num_points),)
+            (int((1 - self.alpha) * self.num_of_points),)
         )
         self.data = torch.concat([x1, x2])
 
     def __len__(self):
-        return self.num_points
+        return self.num_of_points
 
     def __getitem__(self, index):
         return self.data[index]

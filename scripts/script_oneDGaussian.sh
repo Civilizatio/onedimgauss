@@ -82,7 +82,7 @@ case $program_type in
             --saved_models_dir saved_models/net \
             --num_of_points 1000 \
             --mala_sigma 0.1 \
-            --mala_steps 40 \
+            --mala_steps 10 \
             --act_func Softplus \
             --batch_size 100 \
             --n_iter 1200 \

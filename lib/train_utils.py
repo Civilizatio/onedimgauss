@@ -103,7 +103,7 @@ class OptimizerConfigure:
 
     @staticmethod
     def configure_optimizer(
-        params, optimizer_type, lr, weight_decay=0, betas=[0.9, 0.999], sgd_momentum=0.9
+        params, optimizer_type, lr, weight_decay=0, betas=[0.9, 0.999], sgd_momentum=0.
     ):
 
         if optimizer_type.lower() == "adam":

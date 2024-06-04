@@ -9,6 +9,7 @@ from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import MultiStepLR, LambdaLR
 import logging
 from logging import Logger
+import json
 import matplotlib.pyplot as plt
 from typing import Union, Dict
 import seaborn as sn
@@ -410,6 +411,10 @@ def main(args):
         shutil.rmtree(exp_dir)
         os.makedirs(exp_dir)
 
+    kwargs = vars(args)
+    with open(os.path.join(exp_dir,"init_hparams.json"), "w") as fp:
+        json.dump(kwargs, fp, sort_keys=False, indent=4)
+        
     # Logging init
     logging.basicConfig(
         format="%(name)s - %(levelname)s - %(message)s", level=logging.INFO

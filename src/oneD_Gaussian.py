@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 import os
 import sys
 import logging
-import argparse
+import json
 import matplotlib.pyplot as plt
 import shutil
 from torch.utils.tensorboard import SummaryWriter
@@ -152,6 +152,10 @@ def main(args):
         shutil.rmtree(exp_dir)
         os.makedirs(exp_dir)
 
+    kwargs = vars(args)
+    with open(os.path.join(exp_dir,"init_hparams.json"), "w") as fp:
+        json.dump(kwargs, fp, sort_keys=False, indent=4)
+        
     # dir for saving models
     saved_models_dir = os.path.join(exp_dir, args.saved_models_dir)
     
